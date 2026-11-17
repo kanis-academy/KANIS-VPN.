@@ -18,13 +18,18 @@ jobs:
         run: |
           mkdir -p source
           ZIP=$(find . -maxdepth 1 -name 'KanisVPN-corrige-xray.zip' | head -n 1)
+
           if [ -z "$ZIP" ]; then
-            echo "Fichier ZIP introuvable"
+            echo "ZIP KanisVPN introuvable"
             exit 1
           fi
+
           unzip -q "$ZIP" -d source
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE/source/KanisVPN" >> $GITHUB_ENV
-          test -f source/KanisVPN/settings.gradle.kts
+
+          if [ ! -f source/KanisVPN/settings.gradle.kts ]; then
+            echo "Projet Android introuvable"
+            exit 1
+          fi
 
       - name: Installer Java
         uses: actions/setup-java@v4
@@ -32,34 +37,52 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Télécharger Xray
+        run: |
+          git clone --depth 1 https://github.com/2dust/AndroidLibXrayLite.git xray-src
+
       - name: Installer Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version-file: xray-src/go.mod
 
       - name: Installer Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '14742923'
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
       - name: Installer NDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+          sdkmanager --install "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
 
-      - name: Construire Xray
+      - name: Installer gomobile
         run: |
-          git clone --depth 1 https://github.com/2dust/AndroidLibXrayLite.git xray-src
-          cd xray-src
           go install golang.org/x/mobile/cmd/gomobile@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Compiler la bibliothèque Xray
+        working-directory: xray-src
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
           mkdir -p assets data
           bash gen_assets.sh download
           cp -v data/*.dat assets/
+
           gomobile init
           go mod tidy
+
           gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
-          mkdir -p "$PROJECT_DIR/app/libs"
-          cp libv2ray.aar "$PROJECT_DIR/app/libs/"
+
+      - name: Intégrer Xray dans KanisVPN
+        run: |
+          mkdir -p source/KanisVPN/app/libs
+          cp xray-src/libv2ray.aar source/KanisVPN/app/libs/
 
       - name: Installer Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -67,10 +90,10 @@ jobs:
           gradle-version: '8.9'
 
       - name: Compiler APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: source/KanisVPN
         run: gradle assembleDebug --stacktrace
 
-      - name: Publier APK
+      - name: Télécharger APK
         uses: actions/upload-artifact@v4
         with:
           name: KanisVPN-apk
