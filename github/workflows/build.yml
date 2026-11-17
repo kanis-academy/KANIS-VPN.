@@ -1,0 +1,78 @@
+
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Télécharger le dépôt
+        uses: actions/checkout@v4
+
+      - name: Décompresser KanisVPN
+        run: |
+          mkdir -p source
+          ZIP=$(find . -maxdepth 1 -name 'KanisVPN-corrige-xray.zip' | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "Fichier ZIP introuvable"
+            exit 1
+          fi
+          unzip -q "$ZIP" -d source
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/source/KanisVPN" >> $GITHUB_ENV
+          test -f source/KanisVPN/settings.gradle.kts
+
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Installer Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Installer Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Installer NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+
+      - name: Construire Xray
+        run: |
+          git clone --depth 1 https://github.com/2dust/AndroidLibXrayLite.git xray-src
+          cd xray-src
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          mkdir -p assets data
+          bash gen_assets.sh download
+          cp -v data/*.dat assets/
+          gomobile init
+          go mod tidy
+          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+          mkdir -p "$PROJECT_DIR/app/libs"
+          cp libv2ray.aar "$PROJECT_DIR/app/libs/"
+
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compiler APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: Publier APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KanisVPN-apk
+          path: source/KanisVPN/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
