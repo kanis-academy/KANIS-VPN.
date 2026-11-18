@@ -61,4 +61,3 @@ jobs:
         with:
           name: KanisVPN-apk
           path: app/build/outputs/apk/release/*.apk
-          
